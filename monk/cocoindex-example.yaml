@@ -1,0 +1,84 @@
+namespace: cocoindex-monk
+
+example:
+  defines: runnable
+  inherits: cocoindex-monk/base
+  metadata:
+    name: CocoIndex Component Example
+    description: Example composition that wires the reusable CocoIndex runtime to a concrete self-hosted postgresql/db backing service.
+    tags: cocoindex, example, postgres, component
+  permitted-secrets:
+    cocoindex-postgres-password: true
+  connections:
+    postgres:
+      target: cocoindex-monk/postgres
+      service: postgres
+  depends:
+    wait-for:
+      runnables:
+        - cocoindex-monk/postgres
+      timeout: 300
+  variables:
+    postgres_required:
+      type: bool
+      value: true
+      env: COCOINDEX_REQUIRE_POSTGRES
+      description: Require the health endpoint to verify Postgres connectivity for the example.
+    postgres_host:
+      type: string
+      value: <- connection-hostname("postgres")
+      env: POSTGRES_HOST
+      description: Postgres host resolved from the Monk connection.
+    postgres_port:
+      type: int
+      value: <- connection-port("postgres")
+      env: POSTGRES_PORT
+      description: Postgres port resolved from the Monk connection.
+    postgres_database:
+      type: string
+      value: cocoindex
+      env: POSTGRES_DB
+      description: Database name used by this example.
+    postgres_user:
+      type: string
+      value: cocoindex
+      env: POSTGRES_USER
+      description: Database user used by this example.
+    postgres_password:
+      type: string
+      value: <- secret("cocoindex-postgres-password")
+      env: POSTGRES_PASSWORD
+      description: Sensitive database password. Set the plain Monk secret cocoindex-postgres-password before inheriting or deploying this example.
+    postgres_url:
+      type: string
+      value: <- `postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/${postgres_database}`
+      env: POSTGRES_URL
+      description: Sensitive Postgres URL composed from connection details and the secret-backed password.
+    host_port:
+      type: int
+      value: 18182
+      description: Non-privileged host port published by the example for local verification.
+  services:
+    http:
+      container: cocoindex
+      port: <- $service_port
+      protocol: tcp
+      publish: true
+      host-port: <- $host_port
+      description: Locally published HTTP health endpoint for the component example.
+  checks:
+    readiness:
+      initialDelay: 10
+      period: 10
+      attempts: 60
+      code: 'exec("cocoindex", "python", "-c", "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).status)") contains?("200")'
+
+example-stack:
+  defines: process-group
+  metadata:
+    name: CocoIndex Component Example Stack
+    description: Deployable component example that starts the self-hosted PostgreSQL backing service and the CocoIndex example runtime together.
+    tags: cocoindex, example, postgres, component
+  runnable-list:
+    - cocoindex-monk/postgres
+    - cocoindex-monk/example

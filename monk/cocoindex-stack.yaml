@@ -1,0 +1,161 @@
+namespace: cocoindex-monk
+
+standalone:
+  defines: runnable
+  inherits: cocoindex-monk/base
+  metadata:
+    name: CocoIndex Standalone Service
+    description: Production-oriented CocoIndex service wired to a Postgres backing store. It keeps the HTTP service internal; expose it through an authenticated ingress or private network in production.
+    tags: cocoindex, standalone, postgres, production
+  permitted-secrets:
+    cocoindex-postgres-password: true
+  connections:
+    postgres:
+      target: cocoindex-monk/postgres-standalone
+      service: postgres
+  depends:
+    wait-for:
+      runnables:
+        - cocoindex-monk/postgres-standalone
+      timeout: 300
+  variables:
+    postgres_required:
+      type: bool
+      value: true
+      env: COCOINDEX_REQUIRE_POSTGRES
+      description: Require the health endpoint to verify Postgres connectivity.
+    postgres_host:
+      type: string
+      value: <- connection-hostname("postgres")
+      env: POSTGRES_HOST
+      description: Postgres host resolved from the Monk connection.
+    postgres_port:
+      type: int
+      value: <- connection-port("postgres")
+      env: POSTGRES_PORT
+      description: Postgres port resolved from the Monk connection.
+    postgres_database:
+      type: string
+      value: cocoindex
+      env: POSTGRES_DB
+      description: Database name used by the standalone service.
+    postgres_user:
+      type: string
+      value: cocoindex
+      env: POSTGRES_USER
+      description: Database user used by the standalone service.
+    postgres_password:
+      type: string
+      value: <- secret("cocoindex-postgres-password")
+      env: POSTGRES_PASSWORD
+      description: Sensitive database password. Set the plain Monk secret cocoindex-postgres-password before inheriting or deploying this stack.
+    postgres_url:
+      type: string
+      value: <- `postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/${postgres_database}`
+      env: POSTGRES_URL
+      description: Sensitive Postgres URL composed from connection details and the secret-backed password.
+  services:
+    http:
+      container: cocoindex
+      port: <- $service_port
+      protocol: tcp
+      description: Internal HTTP health endpoint for the standalone CocoIndex service.
+  checks:
+    readiness:
+      initialDelay: 10
+      period: 10
+      attempts: 60
+      code: 'exec("cocoindex", "python", "-c", "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).status)") contains?("200")'
+
+stack:
+  defines: process-group
+  metadata:
+    name: CocoIndex Standalone Stack
+    description: Secure production-oriented self-hosted stack with CocoIndex and PostgreSQL. No local host ports are published by this stack.
+    tags: cocoindex, stack, postgres, production
+  runnable-list:
+    - cocoindex-monk/postgres-standalone
+    - cocoindex-monk/standalone
+
+standalone-local:
+  defines: runnable
+  inherits: cocoindex-monk/base
+  metadata:
+    name: CocoIndex Standalone Local Service
+    description: Local verification flavor of the standalone service. It publishes a non-privileged host port for HTTP health checks.
+    tags: cocoindex, standalone, local, postgres
+  permitted-secrets:
+    cocoindex-postgres-password: true
+  connections:
+    postgres:
+      target: cocoindex-monk/postgres-local
+      service: postgres
+  depends:
+    wait-for:
+      runnables:
+        - cocoindex-monk/postgres-local
+      timeout: 300
+  variables:
+    postgres_required:
+      type: bool
+      value: true
+      env: COCOINDEX_REQUIRE_POSTGRES
+      description: Require the health endpoint to verify Postgres connectivity.
+    postgres_host:
+      type: string
+      value: <- connection-hostname("postgres")
+      env: POSTGRES_HOST
+      description: Postgres host resolved from the Monk connection.
+    postgres_port:
+      type: int
+      value: <- connection-port("postgres")
+      env: POSTGRES_PORT
+      description: Postgres port resolved from the Monk connection.
+    postgres_database:
+      type: string
+      value: cocoindex
+      env: POSTGRES_DB
+      description: Database name used by the standalone local service.
+    postgres_user:
+      type: string
+      value: cocoindex
+      env: POSTGRES_USER
+      description: Database user used by the standalone local service.
+    postgres_password:
+      type: string
+      value: <- secret("cocoindex-postgres-password")
+      env: POSTGRES_PASSWORD
+      description: Sensitive database password. Set the plain Monk secret cocoindex-postgres-password before inheriting or deploying this local flavor.
+    postgres_url:
+      type: string
+      value: <- `postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/${postgres_database}`
+      env: POSTGRES_URL
+      description: Sensitive Postgres URL composed from connection details and the secret-backed password.
+    host_port:
+      type: int
+      value: 18183
+      description: Non-privileged host port used for local verification.
+  services:
+    http:
+      container: cocoindex
+      port: <- $service_port
+      protocol: tcp
+      publish: true
+      host-port: <- $host_port
+      description: Locally published HTTP health endpoint for the standalone local flavor.
+  checks:
+    readiness:
+      initialDelay: 10
+      period: 10
+      attempts: 60
+      code: 'exec("cocoindex", "python", "-c", "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).status)") contains?("200")'
+
+stack-local:
+  defines: process-group
+  metadata:
+    name: CocoIndex Standalone Local Stack
+    description: Local flavor of the standalone stack with a published health endpoint for verification. Use cocoindex-monk/stack for production-oriented deployments.
+    tags: cocoindex, stack, local, postgres
+  runnable-list:
+    - cocoindex-monk/postgres-local
+    - cocoindex-monk/standalone-local
