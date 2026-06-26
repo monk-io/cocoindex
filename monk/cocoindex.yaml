@@ -1,0 +1,237 @@
+namespace: cocoindex-monk
+
+base:
+  defines: runnable
+  metadata:
+    name: CocoIndex Runtime
+    description: Reusable CocoIndex runtime component. It installs CocoIndex from PyPI in a public Python image and exposes a health endpoint for compositions. Backing metadata and durable state storage should be provided through environment variables or Monk connections; supported choices include self-hosted postgresql/db and hosted Postgres-compatible packages such as Neon.
+    tags: cocoindex, indexing, rag, agents, python, component
+    website: https://cocoindex.io/
+    source: https://github.com/cocoindex-io/cocoindex
+  variables:
+    cocoindex_version:
+      type: string
+      value: "1.0.11"
+      env: COCOINDEX_VERSION
+      description: CocoIndex package version to install from PyPI.
+    python_version:
+      type: string
+      value: "3.12-slim"
+      description: Public python image tag used for the CocoIndex runtime container.
+    service_port:
+      type: int
+      value: 8000
+      env: COCOINDEX_PORT
+      description: Internal HTTP health service port.
+    postgres_required:
+      type: bool
+      value: false
+      env: COCOINDEX_REQUIRE_POSTGRES
+      description: Whether the health endpoint must verify a live Postgres connection.
+    postgres_url:
+      type: string
+      value: ""
+      env: POSTGRES_URL
+      description: Optional Postgres connection URL. Sensitive when it contains credentials; inheriting templates should compose it from connection details and secret values.
+    postgres_host:
+      type: string
+      value: ""
+      env: POSTGRES_HOST
+      description: Optional Postgres host supplied by an inheriting template or environment.
+    postgres_port:
+      type: int
+      value: 5432
+      env: POSTGRES_PORT
+      description: Optional Postgres port supplied by an inheriting template or environment.
+    postgres_database:
+      type: string
+      value: ""
+      env: POSTGRES_DB
+      description: Optional Postgres database name supplied by an inheriting template or environment.
+    postgres_user:
+      type: string
+      value: ""
+      env: POSTGRES_USER
+      description: Optional Postgres username supplied by an inheriting template or environment.
+    postgres_password:
+      type: string
+      value: ""
+      env: POSTGRES_PASSWORD
+      description: Optional Postgres password. Sensitive; inheriting templates must set it with secret("cocoindex-postgres-password") or another plain secret name.
+  containers:
+    cocoindex:
+      image: python
+      image-tag: <- $python_version
+      bash: sh /opt/cocoindex-monk/start.sh
+  files:
+    start:
+      container: cocoindex
+      path: /opt/cocoindex-monk/start.sh
+      mode: 493
+      contents: |
+        #!/bin/sh
+        set -eu
+
+        python -m pip install --no-cache-dir --upgrade pip
+        python -m pip install --no-cache-dir "cocoindex[postgres]==${COCOINDEX_VERSION}"
+        exec python /opt/cocoindex-monk/health_server.py
+    health-server:
+      container: cocoindex
+      path: /opt/cocoindex-monk/health_server.py
+      mode: 420
+      contents: |
+        import asyncio
+        import importlib.metadata
+        import json
+        import os
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        import asyncpg
+        import cocoindex
+
+        PORT = int(os.environ.get("COCOINDEX_PORT", "8000"))
+        REQUIRE_POSTGRES = os.environ.get("COCOINDEX_REQUIRE_POSTGRES", "false").lower() == "true"
+        POSTGRES_URL = os.environ.get("POSTGRES_URL", "")
+
+
+        async def check_postgres() -> dict[str, object]:
+            if not POSTGRES_URL:
+                return {"ok": not REQUIRE_POSTGRES, "configured": False}
+            conn = await asyncpg.connect(POSTGRES_URL, timeout=3)
+            try:
+                value = await conn.fetchval("select 1")
+            finally:
+                await conn.close()
+            return {"ok": value == 1, "configured": True}
+
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path not in ("/", "/health"):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+
+                postgres = {"ok": True, "configured": False}
+                error = None
+                try:
+                    postgres = asyncio.run(check_postgres())
+                except Exception as exc:
+                    postgres = {"ok": False, "configured": bool(POSTGRES_URL)}
+                    error = str(exc)
+
+                body = {
+                    "ok": bool(postgres["ok"]),
+                    "service": "cocoindex",
+                    "cocoindex_version": importlib.metadata.version("cocoindex"),
+                    "module_loaded": cocoindex.__name__ == "cocoindex",
+                    "postgres": postgres,
+                }
+                if error is not None:
+                    body["error"] = error
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200 if body["ok"] else 503)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+
+        ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+  services:
+    http:
+      container: cocoindex
+      port: <- $service_port
+      protocol: tcp
+      description: Internal HTTP health endpoint for verifying the CocoIndex runtime and optional Postgres connectivity.
+  checks:
+    readiness:
+      initialDelay: 10
+      period: 10
+      attempts: 60
+      code: 'exec("cocoindex", "python", "-c", "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).status)") contains?("200")'
+
+postgres:
+  defines: runnable
+  inherits: postgresql/db
+  metadata:
+    name: CocoIndex Example PostgreSQL
+    description: Self-hosted PostgreSQL backing service for the CocoIndex component example. Production deployments may replace this with another Postgres-compatible package such as Neon.
+    tags: postgres, database, cocoindex, example
+  permitted-secrets:
+    cocoindex-postgres-password: true
+  variables:
+    db_name:
+      type: string
+      value: cocoindex
+      env: POSTGRES_DB
+      description: Database name used by the CocoIndex runtime.
+    db_user:
+      type: string
+      value: cocoindex
+      env: POSTGRES_USER
+      description: Database user used by the CocoIndex runtime.
+    db_pass:
+      type: string
+      value: <- secret("cocoindex-postgres-password")
+      env: POSTGRES_PASSWORD
+      description: Sensitive database password. Set the plain Monk secret cocoindex-postgres-password before deploying this inherited service.
+    version:
+      type: string
+      value: "17"
+      description: Public postgres image tag.
+  containers:
+    postgres:
+      paths:
+        - <- `${volume-path}/cocoindex-postgresql-example:/var/lib/postgresql/data`
+  services:
+    postgres:
+      container: postgres
+      port: 5432
+      protocol: tcp
+      description: Internal PostgreSQL service consumed by CocoIndex runtimes.
+
+postgres-standalone:
+  defines: runnable
+  inherits: cocoindex-monk/postgres
+  metadata:
+    name: CocoIndex Standalone PostgreSQL
+    description: Self-hosted PostgreSQL backing service for the production-oriented CocoIndex standalone stack.
+    tags: postgres, database, cocoindex, standalone
+  containers:
+    postgres:
+      paths:
+        - <- `${volume-path}/cocoindex-postgresql-standalone:/var/lib/postgresql/data`
+  services:
+    postgres:
+      container: postgres
+      port: 5432
+      protocol: tcp
+      description: Internal PostgreSQL service consumed by the standalone CocoIndex service.
+
+postgres-local:
+  defines: runnable
+  inherits: cocoindex-monk/postgres
+  metadata:
+    name: CocoIndex Local PostgreSQL
+    description: Self-hosted PostgreSQL backing service for the local CocoIndex standalone flavor.
+    tags: postgres, database, cocoindex, local
+  variables:
+    db_pass:
+      type: string
+      value: cocoindexlocal
+      env: POSTGRES_PASSWORD
+      description: Local verification flavor uses a fixed self-contained password matching standalone-local; no external secret required.
+  containers:
+    postgres:
+      paths:
+        - <- `${volume-path}/cocoindex-postgresql-local:/var/lib/postgresql/data`
+  services:
+    postgres:
+      container: postgres
+      port: 5432
+      protocol: tcp
+      description: Internal PostgreSQL service consumed by the local standalone CocoIndex flavor.

@@ -1,0 +1,5 @@
+LOAD monk/cocoindex.yaml
+LOAD monk/cocoindex-example.yaml
+LOAD monk/cocoindex-stack.yaml
+
+ENTRY cocoindex-monk/stack-local
