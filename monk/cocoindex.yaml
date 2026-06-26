@@ -219,6 +219,12 @@ postgres-local:
     name: CocoIndex Local PostgreSQL
     description: Self-hosted PostgreSQL backing service for the local CocoIndex standalone flavor.
     tags: postgres, database, cocoindex, local
+  variables:
+    db_pass:
+      type: string
+      value: cocoindexlocal
+      env: POSTGRES_PASSWORD
+      description: Local verification flavor uses a fixed self-contained password matching standalone-local; no external secret required.
   containers:
     postgres:
       paths:

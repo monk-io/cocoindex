@@ -123,9 +123,9 @@ standalone-local:
       description: Database user used by the standalone local service.
     postgres_password:
       type: string
-      value: <- secret("cocoindex-postgres-password")
+      value: cocoindexlocal
       env: POSTGRES_PASSWORD
-      description: Sensitive database password. Set the plain Monk secret cocoindex-postgres-password before inheriting or deploying this local flavor.
+      description: Local verification flavor uses a fixed self-contained password matching postgres-local; no external secret is required.
     postgres_url:
       type: string
       value: <- `postgresql://${postgres_user}:${postgres_password}@${postgres_host}:${postgres_port}/${postgres_database}`
