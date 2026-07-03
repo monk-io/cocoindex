@@ -63,7 +63,6 @@ example:
       container: cocoindex
       port: <- $service_port
       protocol: tcp
-      publish: true
       host-port: <- $host_port
       description: Locally published HTTP health endpoint for the component example.
   checks:
